@@ -277,7 +277,30 @@ class WifiUtil():
 
                     if networks[i].dot11Ssid.ucSSID != b'':
                         ssid += "%c" % networks[i].dot11Ssid.ucSSID[j]
-
+                        
+                # * 该部分用于将SSID转换为UTF-8编码，可正常显示中文字符 p.s.由 PR #31 提供
+                temp_cnt = 0
+                temp_hex_res = 0
+                bytes_list = []
+                converted_name = ""
+                for bin_encode_char in ssid:
+                    if (32 <= ord(bin_encode_char) <= 126):
+                        converted_name = converted_name + bin_encode_char
+                    else:
+                        temp_cnt = temp_cnt + 1
+                        temp_now = int(str(bin(ord(bin_encode_char)))[2:6], 2)
+                        temp_now1 = int(str(bin(ord(bin_encode_char)))[6:10], 2)
+                        temp_hex_res = temp_hex_res + temp_now * 16 + temp_now1
+                        bytes_list.append(temp_hex_res)
+                        temp_hex_res = 0
+                        if temp_cnt == 3:
+                            converted_name = converted_name + bytes(bytes_list).decode('utf-8', 'ignore')
+                            bytes_list = []
+                            temp_hex_res = 0
+                            temp_cnt = 0
+                ssid = converted_name
+                # * 转换结束
+                
                 bss_list = pointer(WLAN_BSS_LIST())
                 self._wlan_get_network_bss_list(self._handle,
                     byref(obj['guid']), byref(bss_list), networks[i].dot11Ssid, networks[i].bSecurityEnabled)
@@ -333,6 +356,8 @@ class WifiUtil():
 
         params.process_akm()
         profile_data = {}
+        # * 使用hex编码，优化对使用了utf-8编码的中文WiFi SSID的连接的适配性
+        profile_data['hex'] = ''.join(['%02X' % byte for byte in params.ssid.encode('utf-8')])
         profile_data['ssid'] = params.ssid
 
         if AKM_TYPE_NONE in params.akm:
@@ -352,6 +377,7 @@ class WifiUtil():
             <name>{profile_name}</name>
             <SSIDConfig>
                 <SSID>
+                    <hex>{hex}</hex>
                     <name>{ssid}</name>
                 </SSID>
             </SSIDConfig>

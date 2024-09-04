@@ -12,16 +12,16 @@ class Profile():
 
         self.id = 0
         self.auth = AUTH_ALG_OPEN
-        self.akm = [AKM_TYPE_NONE]
+        self.akm = AKM_TYPE_NONE
         self.cipher = CIPHER_TYPE_NONE
         self.ssid = None
         self.bssid = None
         self.key = None
 
-    def process_akm(self):
+    # def process_akm(self):
 
-        if len(self.akm) > 1:
-            self.akm = self.akm[-1:]
+    #     if len(self.akm) > 1:
+    #         self.akm = self.akm[-1:]
 
     def __eq__(self, profile):
 
@@ -42,7 +42,11 @@ class Profile():
                 return False
 
         if profile.akm:
-            if set(profile.akm).isdisjoint(set(self.akm)):
+            if profile.akm != self.akm:
                 return False
+        
+        # if profile.akm:
+        #     if set(profile.akm).isdisjoint(set(self.akm)):
+        #         return False
 
         return True

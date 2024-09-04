@@ -30,7 +30,7 @@ test_requires = [
 
 setup(
     name='pywifi',
-    version='1.1.12',
+    version='1.1.13',
     author='Jiang Sheng-Jhih',
     author_email='shengjhih@gmail.com',
     description="A cross-platform module for manipulating WiFi devices.",

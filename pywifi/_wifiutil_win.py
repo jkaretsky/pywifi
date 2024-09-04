@@ -7,8 +7,8 @@ import re
 import platform
 import time
 import logging
-from ctypes import *
-from ctypes.wintypes import *
+from ctypes import * # type: ignore
+from ctypes.wintypes import * # type: ignore
 from comtypes import GUID
 
 from .const import *
@@ -61,20 +61,28 @@ auth_str_to_value_dict = {
 
 akm_str_to_value_dict = {
     'NONE': AKM_TYPE_NONE,
+    'open': AKM_TYPE_OPEN,
+    'shared': AKM_TYPE_SHARED,
     'WPA': AKM_TYPE_WPA,
     'WPAPSK': AKM_TYPE_WPAPSK,
     'WPA2': AKM_TYPE_WPA2,
     'WPA2PSK': AKM_TYPE_WPA2PSK,
-    'OTHER': AKM_TYPE_UNKNOWN
+    'WPA3': AKM_TYPE_WPA3,
+    'WPA3SAE': AKM_TYPE_WPA3SAE,
+    'OTHER': AKM_TYPE_OWE
 }
 
 akm_value_to_str_dict = {
     AKM_TYPE_NONE: 'NONE',
+    AKM_TYPE_OPEN: 'open',
+    AKM_TYPE_SHARED: 'shared',
     AKM_TYPE_WPA: 'WPA',
     AKM_TYPE_WPAPSK: 'WPAPSK',
     AKM_TYPE_WPA2: 'WPA2',
     AKM_TYPE_WPA2PSK: 'WPA2PSK',
-    AKM_TYPE_UNKNOWN: 'OTHER'
+    AKM_TYPE_WPA3: 'WPA3',
+    AKM_TYPE_WPA3SAE: 'WPA3SAE',
+    AKM_TYPE_OWE: 'OTHER'
 }
 
 cipher_str_to_value_dict = {
@@ -284,20 +292,47 @@ class WifiUtil():
                 bytes_list = []
                 converted_name = ""
                 for bin_encode_char in ssid:
+                    # if (32 <= ord(bin_encode_char) <= 126):
+                    #     converted_name = converted_name + bin_encode_char
+                    # else:
+                    #     temp_cnt = temp_cnt + 1
+                    #     temp_now = int(str(bin(ord(bin_encode_char)))[2:6], 2)
+                    #     temp_now1 = int(str(bin(ord(bin_encode_char)))[6:10], 2)
+                    #     temp_hex_res = temp_hex_res + temp_now * 16 + temp_now1
+                    #     bytes_list.append(temp_hex_res)
+                    #     temp_hex_res = 0
+                    #     if temp_cnt == 4:
+                    #         converted_name = converted_name + bytes(bytes_list).decode('utf-8', 'ignore')
+                    #         bytes_list = []
+                    #         temp_hex_res = 0
+                    #         temp_cnt = 0
                     if (32 <= ord(bin_encode_char) <= 126):
-                        converted_name = converted_name + bin_encode_char
+                        converted_name += bin_encode_char
                     else:
-                        temp_cnt = temp_cnt + 1
+                        temp_cnt += 1
                         temp_now = int(str(bin(ord(bin_encode_char)))[2:6], 2)
                         temp_now1 = int(str(bin(ord(bin_encode_char)))[6:10], 2)
                         temp_hex_res = temp_hex_res + temp_now * 16 + temp_now1
                         bytes_list.append(temp_hex_res)
                         temp_hex_res = 0
-                        if temp_cnt == 3:
-                            converted_name = converted_name + bytes(bytes_list).decode('utf-8', 'ignore')
-                            bytes_list = []
-                            temp_hex_res = 0
-                            temp_cnt = 0
+                        # 收集到完整的UTF-8字符时（最多四个字节）
+                        if temp_cnt >= 1 and temp_cnt <= 4:
+                            try:
+                                converted_name = converted_name + bytes(bytes_list).decode('utf-8')
+                                bytes_list = []
+                                temp_hex_res = 0
+                                temp_cnt = 0
+                            except UnicodeDecodeError:
+                                # 如果解码失败，忽略错误并继续处理下一个字符
+                                pass
+                # 处理末尾可能剩下的未完成的字节序列
+                if bytes_list:
+                    try:
+                        decoded_chars = bytes(bytes_list).decode('utf-8', 'ignore')
+                        converted_name += decoded_chars
+                    except UnicodeDecodeError:
+                        pass
+        
                 ssid = converted_name
                 # * 转换结束
                 
@@ -307,26 +342,33 @@ class WifiUtil():
                 bsses = cast(bss_list.contents.wlanBssEntries,
                              POINTER(WLAN_BSS_ENTRY))
 
+                # if ssid == 'testtest':
+                #     print(f'auth:{networks[i].dot11DefaultAuthAlgorithm}')
+                #     print(f'cipher:{networks[i].dot11DefaultCipherAlgorithm}')
+                
                 if networks[i].bSecurityEnabled:
-                    akm = self._get_akm(networks[i].dot11DefaultCipherAlgorithm)
+                    akm = networks[i].dot11DefaultAuthAlgorithm
                     auth_alg = self._get_auth_alg(networks[i].dot11DefaultAuthAlgorithm)
+                    cipher = networks[i].dot11DefaultCipherAlgorithm
                 else:
-                    akm = [AKM_TYPE_NONE]
-                    auth_alg = [AUTH_ALG_OPEN]
+                    akm = AKM_TYPE_OPEN
+                    auth_alg = AUTH_ALG_OPEN
+                    cipher = CIPHER_TYPE_NONE
 
                 for j in range(bss_list.contents.dwNumberOfItems):
                     network = Profile()
 
-                    network.ssid = ssid
+                    network.ssid = ssid # type: ignore
 
-                    network.bssid = ''
+                    network.bssid = '' # type: ignore
                     for k in range(6):
                         network.bssid += "%02x:" % bsses[j].dot11Bssid[k]
 
-                    network.signal = bsses[j].lRssi
-                    network.freq = bsses[j].ulChCenterFrequency
+                    network.signal = bsses[j].lRssi # type: ignore
+                    network.freq = bsses[j].ulChCenterFrequency # type: ignore
                     network.auth = auth_alg
                     network.akm = akm
+                    network.cipher = cipher
                     network_list.append(network)
 
         return network_list
@@ -354,22 +396,21 @@ class WifiUtil():
 
         reason_code = DWORD()
 
-        params.process_akm()
         profile_data = {}
         # * 使用hex编码，优化对使用了utf-8编码的中文WiFi SSID的连接的适配性
         profile_data['hex'] = ''.join(['%02X' % byte for byte in params.ssid.encode('utf-8')])
         profile_data['ssid'] = params.ssid
 
-        if AKM_TYPE_NONE in params.akm:
-            profile_data['auth'] = auth_value_to_str_dict[params.auth]
+        if params.akm in (AKM_TYPE_NONE,AKM_TYPE_OPEN):
+            profile_data['auth'] = 'open'
             profile_data['encrypt'] = "none"
         else:
-            profile_data['auth'] = akm_value_to_str_dict[params.akm[-1]]
+            profile_data['auth'] = akm_value_to_str_dict[params.akm]
             profile_data['encrypt'] = cipher_value_to_str_dict[params.cipher]
 
         profile_data['key'] = params.key
 
-        profile_data['protected'] = 'false'
+        profile_data['protected'] = "false"
         profile_data['profile_name'] = params.ssid
 
         xml = """<?xml version="1.0"?>
@@ -392,7 +433,7 @@ class WifiUtil():
                     </authEncryption>
         """
 
-        if AKM_TYPE_NONE not in params.akm:
+        if params.akm not in (AKM_TYPE_NONE,AKM_TYPE_OPEN):
             xml += """<sharedKey>
                         <keyType>passPhrase</keyType>
                         <protected>{protected}</protected>
@@ -410,6 +451,8 @@ class WifiUtil():
         """
 
         xml = xml.format(**profile_data)
+        
+        # print(xml)
 
         status = self._wlan_set_profile(self._handle, obj['guid'], xml,
                                         True, byref(reason_code))
@@ -456,20 +499,17 @@ class WifiUtil():
                                    profile_name, byref(xml), byref(flags),
                                    byref(access))
             # fill profile info
-            profile.ssid = re.search(r'<name>(.*)</name>', xml.value).group(1)
+            profile.ssid = re.search(r'<name>(.*)</name>', xml.value).group(1) # type: ignore
             auth = re.search(r'<authentication>(.*)</authentication>',
-                                 xml.value).group(1).upper()
+                                 xml.value).group(1).upper() # type: ignore
 
-            profile.akm = []
+            profile.akm = AKM_TYPE_NONE
             if auth not in akm_str_to_value_dict:
-                if auth not in auth_str_to_value_dict:
-                    profile.auth = AUTH_ALG_OPEN
-                else:
-                    profile.auth = auth_str_to_value_dict[auth]
-                    profile.akm.append(AKM_TYPE_NONE)
+                profile.auth = auth_str_to_value_dict[auth]
+                profile.akm = AKM_TYPE_NONE
             else:
-                    profile.auth = AUTH_ALG_OPEN
-                    profile.akm.append(akm_str_to_value_dict[auth])
+                profile.auth = AUTH_ALG_OPEN
+                profile.akm = akm_str_to_value_dict[auth]
 
             profile_list.append(profile)
 
@@ -535,14 +575,14 @@ class WifiUtil():
 
         func = native_wifi.WlanOpenHandle
         func.argtypes = [DWORD, c_void_p, POINTER(DWORD), POINTER(HANDLE)]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(client_version, None, _nego_version, handle)
 
     def _wlan_close_handle(self, handle):
 
         func = native_wifi.WlanCloseHandle
         func.argtypes = [HANDLE, c_void_p]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, None)
 
     def _wlan_enum_interfaces(self, handle, ifaces):
@@ -550,7 +590,7 @@ class WifiUtil():
         func = native_wifi.WlanEnumInterfaces
         func.argtypes = [HANDLE, c_void_p, POINTER(
             POINTER(WLAN_INTERFACE_INFO_LIST))]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, None, ifaces)
 
     def _wlan_get_available_network_list(self, handle,
@@ -560,7 +600,7 @@ class WifiUtil():
         func = native_wifi.WlanGetAvailableNetworkList
         func.argtypes = [HANDLE, POINTER(GUID), DWORD, c_void_p, POINTER(
             POINTER(WLAN_AVAILABLE_NETWORK_LIST))]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, 2, None, network_list)
 
     def _wlan_get_network_bss_list(self, handle, iface_guid, bss_list, ssid = None, security = False):
@@ -568,7 +608,7 @@ class WifiUtil():
         func = native_wifi.WlanGetNetworkBssList
         func.argtypes = [HANDLE, POINTER(GUID), POINTER(
             DOT11_SSID), c_uint, c_bool, c_void_p, POINTER(POINTER(WLAN_BSS_LIST))]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, ssid, 1, security, None, bss_list)
 
     def _wlan_scan(self, handle, iface_guid):
@@ -576,7 +616,7 @@ class WifiUtil():
         func = native_wifi.WlanScan
         func.argtypes = [HANDLE, POINTER(GUID), POINTER(
             DOT11_SSID), POINTER(WLAN_RAW_DATA), c_void_p]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, None, None, None)
 
     def _wlan_connect(self, handle, iface_guid, params):
@@ -584,7 +624,7 @@ class WifiUtil():
         func = native_wifi.WlanConnect
         func.argtypes = [HANDLE, POINTER(GUID), POINTER(
             WLAN_CONNECTION_PARAMETERS), c_void_p]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, params, None)
 
     def _wlan_set_profile(self, handle, iface_guid, xml, overwrite, reason_code):
@@ -592,14 +632,14 @@ class WifiUtil():
         func = native_wifi.WlanSetProfile
         func.argtypes = [HANDLE, POINTER(
             GUID), DWORD, c_wchar_p, c_wchar_p, c_bool, c_void_p, POINTER(DWORD)]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, 2, xml, None, overwrite, None, reason_code)
 
     def _wlan_reason_code_to_str(self, reason_code, buf_size, buf):
 
         func = native_wifi.WlanReasonCodeToString
         func.argtypes = [DWORD, DWORD, PWCHAR, c_void_p]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(reason_code, buf_size, buf, None)
 
     def _wlan_get_profile_list(self, handle, iface_guid, profile_list):
@@ -607,7 +647,7 @@ class WifiUtil():
         func = native_wifi.WlanGetProfileList
         func.argtypes = [HANDLE, POINTER(GUID), c_void_p, POINTER(
             POINTER(WLAN_PROFILE_INFO_LIST))]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, None, profile_list)
 
     def _wlan_get_profile(self, handle, iface_guid, profile_name, xml, flags, access):
@@ -615,14 +655,14 @@ class WifiUtil():
         func = native_wifi.WlanGetProfile
         func.argtypes = [HANDLE, POINTER(GUID), c_wchar_p, c_void_p, POINTER(
             c_wchar_p), POINTER(DWORD), POINTER(DWORD)]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, profile_name, None, xml, flags, access)
 
     def _wlan_delete_profile(self, handle, iface_guid, profile_name):
 
         func = native_wifi.WlanDeleteProfile
         func.argtypes = [HANDLE, POINTER(GUID), c_wchar_p, c_void_p]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, profile_name, None)
 
     def _wlan_query_interface(self, handle, iface_guid, opcode, data_size, data, opcode_value_type):
@@ -630,32 +670,30 @@ class WifiUtil():
         func = native_wifi.WlanQueryInterface
         func.argtypes = [HANDLE, POINTER(GUID), DWORD, c_void_p, POINTER(
             DWORD), POINTER(POINTER(DWORD)), POINTER(DWORD)]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, opcode, None, data_size, data, opcode_value_type)
 
     def _wlan_disconnect(self, handle, iface_guid):
 
         func = native_wifi.WlanDisconnect
         func.argtypes = [HANDLE, POINTER(GUID), c_void_p]
-        func.restypes = [DWORD]
+        func.restypes = [DWORD] # type: ignore
         return func(handle, iface_guid, None)
 
     def _get_auth_alg(self, auth_val):
-
-        auth_alg = []
+        
+        auth_alg = AUTH_ALG_OPEN
         if auth_val in [1, 3, 4, 6, 7]:
-            auth_alg.append(AUTH_ALG_OPEN)
+            auth_alg = AUTH_ALG_OPEN
         elif auth_val == 2:
-            auth_alg.append(AUTH_ALG_SHARED)
+            auth_alg = AUTH_ALG_SHARED
 
         return auth_alg
 
     def _get_akm(self, akm_val):
 
-        akm = []
-        if akm_val == 2:
-            akm.append(AKM_TYPE_WPAPSK)
-        elif akm_val == 4:
-            akm.append(AKM_TYPE_WPA2PSK)
-
+        akm = AKM_TYPE_OPEN
+        if akm_val in akm_value_to_str_dict:
+            akm = akm_value_to_str_dict[akm_val]
+        
         return akm

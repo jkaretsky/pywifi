@@ -7,6 +7,7 @@ import logging
 import socket
 import stat
 import os
+import re
 
 from .const import *
 from .profile import Profile
@@ -32,19 +33,36 @@ key_mgmt_to_str = {
     AKM_TYPE_WPA: 'WPA-EAP',
     AKM_TYPE_WPAPSK: 'WPA-PSK',
     AKM_TYPE_WPA2: 'WPA-EAP',
-    AKM_TYPE_WPA2PSK: 'WPA-PSK'
+    AKM_TYPE_WPA2PSK: 'WPA-PSK',
+    AKM_TYPE_WPA3: 'WPA-EAP-SHA256',
+    AKM_TYPE_WPA3SAE: 'SAE',
+    AKM_TYPE_WPA3ENT: 'WPA-EAP-SHA256',
 }
 
 key_mgmt_to_proto_str = {
     AKM_TYPE_WPA: 'WPA',
     AKM_TYPE_WPAPSK: 'WPA',
     AKM_TYPE_WPA2: 'RSN',
-    AKM_TYPE_WPA2PSK: 'RSN'
+    AKM_TYPE_WPA2PSK: 'RSN',
+    AKM_TYPE_WPA3: 'WPA3',
+    AKM_TYPE_WPA3SAE: 'RSN',
+    AKM_TYPE_WPA3ENT: 'WPA3',
+}
+
+display_str_to_key = {
+    'open': AKM_TYPE_OPEN,
+    'WPA': AKM_TYPE_WPA,
+    'WPAPSK': AKM_TYPE_WPAPSK,
+    'WPA2': AKM_TYPE_WPA2,
+    'WPA2PSK': AKM_TYPE_WPA2PSK,
+    'WPA3': AKM_TYPE_WPA3,
+    'WPA3SAE': AKM_TYPE_WPA3SAE,
+    'WPA3ENT': AKM_TYPE_WPA3ENT,
 }
 
 proto_to_key_mgmt_id = {
     'WPA': AKM_TYPE_WPAPSK,
-    'RSN': AKM_TYPE_WPA2PSK
+    'RSN': AKM_TYPE_WPA2PSK,
 }
 
 cipher_str_to_value = {
@@ -78,16 +96,57 @@ class WifiUtil():
             bss.bssid = values[0]
             bss.freq = int(values[1])
             bss.signal = int(values[2])
-            bss.ssid = values[4]
-            bss.akm = []
+
+            # 定义一个正则表达式来匹配ssid转义序列
+            pattern = r'\\x([0-9a-fA-F]{2}|[0-9a-fA-F]{4})'
+            # 使用lambda表达式来替换匹配到的ssid转义序列
+            ssid = re.sub(pattern, lambda m: chr(int(m.group(1), 16)), values[4])
+
+            # * 该部分用于将SSID转换为UTF-8编码，可正常显示中文字符 p.s.由 PR #31 提供
+            temp_cnt = 0
+            temp_hex_res = 0
+            bytes_list = []
+            converted_name = ""
+            for bin_encode_char in ssid:
+                if (32 <= ord(bin_encode_char) <= 126):
+                    converted_name += bin_encode_char
+                else:
+                    temp_cnt += 1
+                    temp_now = int(str(bin(ord(bin_encode_char)))[2:6], 2)
+                    temp_now1 = int(str(bin(ord(bin_encode_char)))[6:10], 2)
+                    temp_hex_res = temp_hex_res + temp_now * 16 + temp_now1
+                    bytes_list.append(temp_hex_res)
+                    temp_hex_res = 0
+                    # 收集到完整的UTF-8字符时（最多四个字节）
+                    if temp_cnt >= 1 and temp_cnt <= 4:
+                        try:
+                            converted_name = converted_name + bytes(bytes_list).decode('utf-8')
+                            bytes_list = []
+                            temp_hex_res = 0
+                            temp_cnt = 0
+                        except UnicodeDecodeError:
+                            # 如果解码失败，忽略错误并继续处理下一个字符
+                            pass
+            # 处理末尾可能剩下的未完成的字节序列
+            if bytes_list:
+                try:
+                    decoded_chars = bytes(bytes_list).decode('utf-8', 'ignore')
+                    converted_name += decoded_chars
+                except UnicodeDecodeError:
+                    pass
+            bss.ssid = converted_name
+
+            bss.akm = 7
             if 'WPA-PSK' in values[3]:
-                bss.akm.append(AKM_TYPE_WPAPSK)
-            if 'WPA2-PSK' in values[3]:
-                bss.akm.append(AKM_TYPE_WPA2PSK)
-            if 'WPA-EAP' in values[3]:
-                bss.akm.append(AKM_TYPE_WPA)
-            if 'WPA2-EAP' in values[3]:
-                bss.akm.append(AKM_TYPE_WPA2)
+                bss.akm = AKM_TYPE_WPAPSK
+            elif 'WPA2-PSK' in values[3]:
+                bss.akm = AKM_TYPE_WPA2PSK
+            elif 'WPA2-SAE' in values[3]:
+                bss.akm = AKM_TYPE_WPA3SAE
+            elif 'WPA-EAP' in values[3]:
+                bss.akm = AKM_TYPE_WPA
+            elif 'WPA2-EAP' in values[3]:
+                bss.akm = AKM_TYPE_WPA2
 
             bss.auth = AUTH_ALG_OPEN
 
@@ -125,17 +184,21 @@ class WifiUtil():
         network_id = self._send_cmd_to_wpas(obj['name'], 'ADD_NETWORK', True)
         network_id = network_id.strip()
 
-        params.process_akm()
+        # params.process_akm()
 
         self._send_cmd_to_wpas(
                 obj['name'],
                 'SET_NETWORK {} ssid \"{}\"'.format(network_id, params.ssid))
 
         key_mgmt = ''
-        if params.akm[-1] in [AKM_TYPE_WPAPSK, AKM_TYPE_WPA2PSK]:
-            key_mgmt = 'WPA-PSK'
-        elif params.akm[-1] in [AKM_TYPE_WPA, AKM_TYPE_WPA2]:
-            key_mgmt = 'WPA-EAP'
+        # if params.akm in [AKM_TYPE_WPAPSK, AKM_TYPE_WPA2PSK]:
+        #     key_mgmt = 'WPA-PSK'
+        # elif params.akm in [AKM_TYPE_WPA, AKM_TYPE_WPA2]:
+        #     key_mgmt = 'WPA-EAP'
+        # else:
+        #     key_mgmt = 'NONE'
+        if params.akm in key_mgmt_to_str:
+            key_mgmt = key_mgmt_to_str[params.akm]
         else:
             key_mgmt = 'NONE'
 
@@ -147,9 +210,13 @@ class WifiUtil():
                         key_mgmt))
 
         proto = ''
-        if params.akm[-1] in [AKM_TYPE_WPAPSK, AKM_TYPE_WPA]:
-            proto = 'WPA'
-        elif params.akm[-1] in [AKM_TYPE_WPA2PSK, AKM_TYPE_WPA2]:
+        # if params.akm in [AKM_TYPE_WPAPSK, AKM_TYPE_WPA]:
+        #     proto = 'WPA'
+        # elif params.akm in [AKM_TYPE_WPA2PSK, AKM_TYPE_WPA2]:
+        #     proto = 'RSN'
+        if params.akm in key_mgmt_to_proto_str:
+            proto = key_mgmt_to_proto_str[params.akm]
+        else:
             proto = 'RSN'
 
         if proto:
@@ -159,7 +226,7 @@ class WifiUtil():
                         network_id,
                         proto))
 
-        if params.akm[-1] in [AKM_TYPE_WPAPSK, AKM_TYPE_WPA2PSK]:
+        if params.akm in key_mgmt_to_str:
             self._send_cmd_to_wpas(
                     obj['name'],
                     'SET_NETWORK {} psk \"{}\"'.format(network_id, params.key))
@@ -204,26 +271,36 @@ class WifiUtil():
             if key_mgmt.upper().startswith('FAIL'):
                 continue
             else:
-                if key_mgmt.upper() in ['WPA-PSK']:
+                if key_mgmt.upper() == 'WPA-PSK':
                     proto = self._send_cmd_to_wpas(
                         obj['name'],
                         'GET_NETWORK {} proto'.format(network_id),
                         True)
 
                     if proto.upper() == 'RSN':
-                        network.akm.append(AKM_TYPE_WPA2PSK)
+                        network.akm = AKM_TYPE_WPA2PSK
                     else:
-                        network.akm.append(AKM_TYPE_WPAPSK)
-                elif key_mgmt.upper() in ['WPA-EAP']:
+                        network.akm = AKM_TYPE_WPAPSK
+                elif key_mgmt.upper() == 'SAE' or key_mgmt.upper() == "WPA-EAP-SHA256":
                     proto = self._send_cmd_to_wpas(
                         obj['name'],
                         'GET_NETWORK {} proto'.format(network_id),
                         True)
 
                     if proto.upper() == 'RSN':
-                        network.akm.append(AKM_TYPE_WPA2)
+                        network.akm = AKM_TYPE_WPA3SAE
                     else:
-                        network.akm.append(AKM_TYPE_WPA)
+                        network.akm = AKM_TYPE_WPA3
+                elif key_mgmt.upper() == 'WPA-EAP':
+                    proto = self._send_cmd_to_wpas(
+                        obj['name'],
+                        'GET_NETWORK {} proto'.format(network_id),
+                        True)
+
+                    if proto.upper() == 'RSN':
+                        network.akm = AKM_TYPE_WPA2
+                    else:
+                        network.akm = AKM_TYPE_WPA
 
             ciphers = self._send_cmd_to_wpas(
                 obj['name'],

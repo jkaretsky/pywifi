@@ -601,7 +601,7 @@ class WifiUtil():
         func.argtypes = [HANDLE, POINTER(GUID), DWORD, c_void_p, POINTER(
             POINTER(WLAN_AVAILABLE_NETWORK_LIST))]
         func.restypes = [DWORD] # type: ignore
-        return func(handle, iface_guid, 2, None, network_list)
+        return func(handle, iface_guid, 0, None, network_list)
 
     def _wlan_get_network_bss_list(self, handle, iface_guid, bss_list, ssid = None, security = False):
 
@@ -633,7 +633,7 @@ class WifiUtil():
         func.argtypes = [HANDLE, POINTER(
             GUID), DWORD, c_wchar_p, c_wchar_p, c_bool, c_void_p, POINTER(DWORD)]
         func.restypes = [DWORD] # type: ignore
-        return func(handle, iface_guid, 2, xml, None, overwrite, None, reason_code)
+        return func(handle, iface_guid, 0, xml, None, overwrite, None, reason_code)
 
     def _wlan_reason_code_to_str(self, reason_code, buf_size, buf):
 
